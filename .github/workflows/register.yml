@@ -1,0 +1,195 @@
+name: MS Register
+on: workflow_dispatch
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install deps
+      run: |
+        pip install playwright requests
+        playwright install chromium --with-deps 2>/dev/null || playwright install chromium
+    - name: Register
+      env:
+        PX_PROXY: ""
+      run: |
+        cat > register.py << 'PYEOF'
+import asyncio, json, time, random, string, re
+import requests
+from playwright.async_api import async_playwright
+
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+BASE = "https://signup.live.com"
+
+def rand_str(n=8):
+    return ''.join(random.choices(string.ascii_lowercase, k=n))
+
+async def main():
+    email_prefix = rand_str(10)
+    email = f"{email_prefix}@outlook.com"
+    password = "Aa!" + rand_str(10) + str(random.randint(10,99))
+    print(f"Email: {email}")
+    
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+    
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        ctx = await browser.new_context(user_agent=UA, viewport={"width":1280,"height":900}, locale="en-US")
+        page = await ctx.new_page()
+        
+        # 1. 打开注册页
+        print("=== 1. 打开注册页 ===")
+        await page.goto(f"{BASE}/signup?lic=1", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(5000)
+        
+        # 2. 填邮箱
+        print("=== 2. 填邮箱 ===")
+        inp = page.locator('input[type="email"]').first
+        await inp.wait_for(state="visible", timeout=15000)
+        await inp.click()
+        for ch in email:
+            await inp.type(ch, delay=random.randint(30,80))
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(4000)
+        
+        # 3. 填密码
+        print("=== 3. 填密码 ===")
+        pw = page.locator('input[type="password"]').first
+        await pw.wait_for(state="visible", timeout=15000)
+        await pw.click()
+        for ch in password:
+            await pw.type(ch, delay=random.randint(25,60))
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(4000)
+        
+        # 4. 生日
+        print("=== 4. 生日 ===")
+        body = await page.evaluate("() => document.body.innerText.slice(0,200)")
+        if "Add some details" in body or "birth" in body.lower():
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(500)
+            try:
+                combos = page.locator('[role=combobox]')
+                n = await combos.count()
+                if n >= 3:
+                    await page.evaluate("() => document.querySelectorAll('[role=combobox]')[1].click()")
+                    await page.wait_for_timeout(800)
+                    await page.get_by_role("option", name="January").first.click(timeout=5000)
+                    await page.wait_for_timeout(800)
+                    for _ in range(6):
+                        ok = await page.evaluate("()=>{const cs=[...document.querySelectorAll('[role=combobox]')];const d=cs.find(c=>/day/i.test((c.getAttribute('aria-label')||'')+(c.id||'')))||cs[cs.length-1];if(d){d.click();return 1;}return 0;}")
+                        if ok: break
+                        await page.wait_for_timeout(500)
+                    await page.wait_for_timeout(800)
+                    await page.get_by_role("option", name="15", exact=True).first.click(timeout=5000)
+                    await page.wait_for_timeout(800)
+                    yr = page.locator('input[type="text"],input[type="number"]').last
+                    await yr.click()
+                    await yr.fill("1990")
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_timeout(6000)
+            except Exception as e:
+                print(f"生日: {e}")
+        
+        # 5. 姓名
+        print("=== 5. 姓名 ===")
+        body = await page.evaluate("() => document.body.innerText.slice(0,200)")
+        if "name" in body.lower() or "First name" in body:
+            try:
+                fn = page.locator('input').nth(0)
+                ln = page.locator('input').nth(1)
+                await fn.click()
+                for ch in "John": await fn.type(ch, delay=50)
+                await ln.click()
+                for ch in "Test": await ln.type(ch, delay=50)
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(6000)
+            except Exception as e:
+                print(f"姓名: {e}")
+        
+        # 6. 等PX(如有hold挑战)
+        body = await page.evaluate("() => document.body.innerText.slice(0,300)")
+        print(f"=== 6. 当前页面: {body[:120]} ===")
+        
+        # 如果有hold挑战, 自动按
+        for round_n in range(5):
+            if "hold" not in body.lower() and "prove" not in body.lower():
+                break
+            print(f"  Hold round {round_n+1}...")
+            # 找hold按钮
+            try:
+                boxes = await page.evaluate("""() => {
+                    const out = [];
+                    for (const f of document.querySelectorAll('iframe')) {
+                        const r = f.getBoundingClientRect();
+                        if (r.width > 50 && r.height > 30 && r.y > 100 && r.y < 700)
+                            out.push({x: r.x, y: r.y, w: r.width, h: r.height});
+                    }
+                    return out;
+                }""")
+                if boxes:
+                    b = min(boxes, key=lambda x: x['w'])
+                    cx, cy = b['x']+b['w']/2, b['y']+b['h']/2
+                    await page.mouse.move(cx-60, cy+20, steps=8)
+                    await page.wait_for_timeout(300)
+                    await page.mouse.move(cx, cy, steps=6)
+                    await page.wait_for_timeout(300)
+                    await page.mouse.down()
+                    hold_ms = 1500 + random.random()*1200
+                    t0 = time.time()
+                    while (time.time()-t0)*1000 < hold_ms:
+                        await page.mouse.move(cx+random.uniform(-1.5,1.5), cy+random.uniform(-1,1))
+                        await page.wait_for_timeout(random.randint(30,80))
+                    await page.mouse.up()
+                    print(f"  Held {hold_ms:.0f}ms")
+                    await page.wait_for_timeout(8000)
+            except Exception as e:
+                print(f"  Hold err: {e}")
+            body = await page.evaluate("() => document.body.innerText.slice(0,300)")
+        
+        # 7. 收割cookie
+        print("=== 7. 收割 ===")
+        cookies = await ctx.cookies()
+        px3 = ""
+        for c in cookies:
+            if c["name"] == "_px3":
+                px3 = c["value"]
+        
+        # 同时获取页面中的ServerData canary
+        sd_text = await page.evaluate("() => { try { return JSON.stringify(window.__ServerData || {}); } catch(e) { return '{}'; } }")
+        
+        final_body = await page.evaluate("() => document.body.innerText.slice(0,500)")
+        final_url = page.url
+        print(f"px3: {px3[:40] if px3 else '(无)'}...")
+        print(f"URL: {final_url}")
+        print(f"页面: {final_body[:200]}")
+        
+        # 8. 如果页面显示成功/跳转, 保存结果
+        if "signup" not in final_url or "welcome" in final_body.lower() or "stay" in final_body.lower():
+            print("★★★ 可能已注册成功!")
+        
+        await browser.close()
+        
+        # 保存
+        with open("/tmp/result.json", "w") as f:
+            json.dump({"email": email, "password": password, "px3": px3[:50],
+                       "final_url": final_url, "final_body": final_body[:300],
+                       "cookies": [{"name": c["name"], "value": c["value"][:50]} for c in cookies]}, f, indent=1)
+        
+        # 输出combo
+        print(f"\n=== COMBO ===\n{email}----{password}")
+
+asyncio.run(main())
+PYEOF
+        python3 register.py
+    - name: Upload Result
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: registration-result
+        path: /tmp/result.json
+        if-no-files-found: ignore
