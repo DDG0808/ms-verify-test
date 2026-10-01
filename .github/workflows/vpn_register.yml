@@ -30,7 +30,7 @@ jobs:
         done
         sleep 3
         echo "最终出口: $(curl -s --max-time 5 http://api.ipify.org)"
-        tail -3 /tmp/vpn.log
+        sudo tail -3 /tmp/vpn.log || true
     - name: Register
       run: python register_via_vpn.py
       timeout-minutes: 8
