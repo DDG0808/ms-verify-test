@@ -1,0 +1,66 @@
+name: MS Verify Full
+on: workflow_dispatch
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Full Flow
+      run: |
+        echo "=== 1. IP ==="
+        curl -s https://api.ipify.org && echo ""
+        
+        echo "=== 2. Bootstrap ==="
+        curl -s -c /tmp/ck.txt -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" "https://signup.live.com/signup?lic=1" -o /tmp/page.html
+        wc -c /tmp/page.html
+        
+        eval $(python3 -c "
+        import re, json
+        html = open('/tmp/page.html').read()
+        m = re.search(r'var ServerData=({.*?});', html, re.S)
+        if m:
+            sd = json.loads(m.group(1))
+            canary = sd.get('apiCanary','')
+            uaid = sd.get('sUnauthSessionID','')
+            hpgid = str(sd.get('hpgid', 200225))
+            print(f'export CANARY=\"{canary}\" UAID=\"{uaid}\" HPGID=\"{hpgid}\"')
+        ")
+        echo "canary=${CANARY:0:20}... uaid=$UAID hpgid=$HPGID"
+        
+        echo "=== 3. risk/initialize ==="
+        INIT_RESP=$(curl -s -b /tmp/ck.txt -c /tmp/ck.txt \
+          -X POST "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/api/v1.0/risk/initialize" \
+          -H "Content-Type: application/json; charset=utf-8" \
+          -H "canary: $CANARY" \
+          -H "correlationId: $UAID" \
+          -H "client-request-id: $UAID" \
+          -H "hpgid: $HPGID" \
+          -H "hpgact: 0" \
+          -H "Origin: https://signup.live.com" \
+          -H "Referer: https://signup.live.com/signup?lic=1" \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+          -d '{"continuationToken":""}')
+        echo "$INIT_RESP" | python3 -m json.tool 2>/dev/null | head -10
+        
+        CTOKEN=$(echo "$INIT_RESP" | python3 -c "
+        import json, sys
+        try:
+            d = json.load(sys.stdin)
+            print(d.get('continuationToken',''))
+        except: print('')
+        ")
+        echo "continuationToken=${CTOKEN:0:30}..."
+        
+        echo "=== 4. verify #1 ==="
+        VRESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+          -X POST "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/api/v1.0/risk/verify" \
+          -H "Content-Type: application/json; charset=utf-8" \
+          -H "canary: $CANARY" \
+          -H "correlationId: $UAID" \
+          -H "client-request-id: $UAID" \
+          -H "hpgid: $HPGID" \
+          -H "hpgact: 0" \
+          -H "Origin: https://signup.live.com" \
+          -H "Referer: https://signup.live.com/signup?lic=1" \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
+          -d "{\"continuationToken\":\"$CTOKEN\",\"riskProviderMetadata\":[{\"riskProvider\":\"Human\",\"px3\":\"\",\"pxde\":\"\",\"pxvid\":\"\"}],\"msaRiskVerifySignature\":{\"memberName\":\"test$(date +%s)@outlook.com\",\"siteId\":\"00000000487A244A\",\"uiFlavor\":\"Web\",\"appId\":\"00000000487A244A\",\"birthdate\":\"15:01:1990\",\"firstName\":\"John\",\"lastName\":\"Test\",\"countryCode\":\"US\",\"verificationCode\":\"\",\"deviceDetails\":{\"isRdm\":false},\"action\":\"SignUp\"}}")
+        echo "$VRESP"
