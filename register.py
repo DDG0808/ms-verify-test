@@ -13,7 +13,7 @@ async def main():
     print(f"Email: {email} Password: {password}")
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False)
         ctx = await browser.new_context(user_agent=UA, viewport={"width":1280,"height":900}, locale="en-US")
         page = await ctx.new_page()
         
