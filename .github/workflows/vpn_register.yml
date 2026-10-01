@@ -1,0 +1,46 @@
+name: VPN Register
+on: workflow_dispatch
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install VPN and Browser
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq openvpn
+        pip install -q playwright
+        playwright install chromium --with-deps 2>/dev/null || playwright install chromium
+    - name: Connect VPN
+      run: |
+        OLD_IP=$(curl -s --max-time 5 http://api.ipify.org)
+        echo "VPN前IP: $OLD_IP"
+        sudo openvpn --config vpn_2.ovpn --daemon --log /tmp/vpn.log --writepid /tmp/vpn.pid
+        for i in $(seq 1 30); do
+          sleep 2
+          NEW_IP=$(curl -s --max-time 5 http://api.ipify.org 2>/dev/null || echo "")
+          if [ -n "$NEW_IP" ] && [ "$NEW_IP" != "$OLD_IP" ]; then
+            echo "VPN IP: $NEW_IP"
+            echo "VPN_IP=$NEW_IP" >> $GITHUB_ENV
+            break
+          fi
+        done
+        sleep 3
+        echo "最终出口: $(curl -s --max-time 5 http://api.ipify.org)"
+        tail -3 /tmp/vpn.log
+    - name: Register
+      run: python register_via_vpn.py
+      timeout-minutes: 8
+    - name: Stop VPN
+      if: always()
+      run: sudo kill $(cat /tmp/vpn.pid) 2>/dev/null || true
+    - name: Upload
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: vpn-result
+        path: /tmp/result.json
+        if-no-files-found: ignore
