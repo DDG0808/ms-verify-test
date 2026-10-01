@@ -28,7 +28,9 @@ jobs:
             break
           fi
         done
-        sleep 3
+        sleep 5
+        echo "DNS测试: $(nslookup signup.live.com 2>sleep 31 | tail -2 | head -1)"
+        echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
         echo "最终出口: $(curl -s --max-time 5 http://api.ipify.org)"
         sudo tail -3 /tmp/vpn.log || true
     - name: Register
